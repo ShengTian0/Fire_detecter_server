@@ -5,7 +5,17 @@ import re
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Query
+from fastapi import (
+    FastAPI,
+    File,
+    UploadFile,
+    HTTPException,
+    Depends,
+    Query,
+    Path,       # 新增
+    Response    # 新增
+)
+from sqlalchemy.exc import SQLAlchemyError
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -13,7 +23,7 @@ from sqlalchemy import desc
 from PIL import Image
 import numpy as np
 from ultralytics import YOLO
-from pydantic import BaseModel
+from pydantic import BaseModel,Field
 
 # 数据库配置
 from database import SessionLocal, engine, DetectionRecord, Base
@@ -28,7 +38,7 @@ class DetectionRecordResponse(BaseModel):
     smoke_count: int
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 # 初始化FastAPI应用
@@ -228,6 +238,44 @@ def get_records(
         record.image_path = f"/static/uploads/{os.path.basename(record.image_path)}"
         record.result_path = f"/static/results/{os.path.basename(record.result_path)}"
     return records
+
+#删除接口
+@app.delete("/records/{record_id}",
+            status_code=204,
+            summary="删除检测记录",
+            responses={
+                204: {"description": "删除成功"},
+                404: {"description": "记录不存在"}
+            })
+def delete_record(
+        record_id: int = Path(..., gt=0, description="记录ID"),
+        db: Session = Depends(get_db)
+):
+    # 查询记录
+    record = db.query(DetectionRecord).filter(DetectionRecord.id == record_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="记录不存在")
+
+    try:
+        # 删除文件
+        upload_file = os.path.join(STATIC_DIR, record.image_path)
+        result_file = os.path.join(STATIC_DIR, record.result_path)
+        if os.path.exists(upload_file):
+            os.remove(upload_file)
+        if os.path.exists(result_file):
+            os.remove(result_file)
+
+        # 删除记录
+        db.delete(record)
+        db.commit()
+    except SQLAlchemyError as e:  # 使用已导入的异常类型
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"数据库错误: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"文件操作失败: {str(e)}")
+
+    return Response(status_code=204)
+
 
 # 健康检查接口
 @app.get("/health", include_in_schema=False)
