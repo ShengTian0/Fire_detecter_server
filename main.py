@@ -165,9 +165,11 @@ async def detect_fire_smoke(
             db.rollback()
             raise HTTPException(500, f"数据库错误: {str(db_error)}")
 
+        # 修改返回的图片路径为完整URL
         return {
             "status": "success",
-            "result_url": f"/static/results/{saved_filename}",  # 修正返回路径
+            "image_url": f"http://localhost:8000/static/uploads/{saved_filename}",
+            "result_url": f"http://localhost:8000/static/results/{saved_filename}",
             "fire_count": record.fire_count,
             "smoke_count": record.smoke_count,
             "record_id": record.id
