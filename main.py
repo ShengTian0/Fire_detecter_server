@@ -9,6 +9,7 @@ from typing import List, Optional
 from PIL import Image
 # 数据库配置
 from database import SessionLocal, engine, DetectionRecord, Base
+
 from fastapi import (
     FastAPI,
     File,
@@ -16,8 +17,9 @@ from fastapi import (
     HTTPException,
     Depends,
     Query,
-    Path,  # 新增
-    Response  # 新增
+    Path,
+    Response,
+    Form
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -183,7 +185,7 @@ os.makedirs(f"{STATIC_DIR}/results", exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # 加载YOLO模型
-model = YOLO("models/best.pt")  # 替换为你的模型路径
+model = YOLO("models/Fire&Smoke.pt")  # 替换为你的模型路径
 
 
 # 数据库依赖
@@ -266,6 +268,7 @@ async def get_current_user(
 
 
 # 检测接口
+
 @app.post("/detect/",
           response_model=dict,
           status_code=201,
@@ -277,6 +280,7 @@ async def get_current_user(
           })
 async def detect_fire_smoke(
         file: UploadFile = File(..., description="需要检测的图片文件（JPEG/PNG）"),
+        model: str = Form(..., description="选择的模型名称"),  # 确保这行代码正确
         db: Session = Depends(get_db)
 ):
     # 验证文件类型
@@ -316,6 +320,9 @@ async def detect_fire_smoke(
 
         # ================== 模型推理 ==================
         try:
+            # 根据传入的模型名称加载模型
+            model_path = f"models/{model}.pt"
+            model = YOLO(model_path)
             results = model.predict(
                 source=upload_path,
                 imgsz=640,
@@ -378,7 +385,6 @@ async def detect_fire_smoke(
             status_code=500,
             detail=f"检测失败: {str(e)}"
         )
-
 
 # 历史记录接口
 @app.get("/records/",
