@@ -1,10 +1,13 @@
 # main.py
 import os
-import uuid
 import re
+import uuid
 from datetime import datetime
 from typing import List, Optional
 
+from PIL import Image
+# 数据库配置
+from database import SessionLocal, engine, DetectionRecord, Base
 from fastapi import (
     FastAPI,
     File,
@@ -12,21 +15,17 @@ from fastapi import (
     HTTPException,
     Depends,
     Query,
-    Path,       # 新增
-    Response    # 新增
+    Path,  # 新增
+    Response  # 新增
 )
-from sqlalchemy.exc import SQLAlchemyError
-from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 from sqlalchemy import desc
-from PIL import Image
-import numpy as np
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 from ultralytics import YOLO
-from pydantic import BaseModel,Field
 
-# 数据库配置
-from database import SessionLocal, engine, DetectionRecord, Base
 
 # 响应模型
 class DetectionRecordResponse(BaseModel):
@@ -50,7 +49,7 @@ app = FastAPI(
 
 # 跨域配置
 app.add_middleware(
-    CORSMiddleware,#1212
+    CORSMiddleware,  # 1212
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
@@ -65,6 +64,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 # 加载YOLO模型
 model = YOLO("models/best.pt")  # 替换为你的模型路径
 
+
 # 数据库依赖
 def get_db():
     db = SessionLocal()
@@ -73,16 +73,19 @@ def get_db():
     finally:
         db.close()
 
+
 @app.on_event("startup")
 async def startup_db():
     # 创建数据库表
     Base.metadata.create_all(bind=engine)
+
 
 # 工具函数
 async def save_upload_file(file: UploadFile, save_path: str):
     with open(save_path, "wb") as f:
         while chunk := await file.read(1024 * 1024):  # 1MB chunks
             f.write(chunk)
+
 
 # 检测接口
 @app.post("/detect/",
@@ -198,6 +201,7 @@ async def detect_fire_smoke(
             detail=f"检测失败: {str(e)}"
         )
 
+
 # 历史记录接口
 @app.get("/records/",
          response_model=List[DetectionRecordResponse],
@@ -239,7 +243,8 @@ def get_records(
         record.result_path = f"/static/results/{os.path.basename(record.result_path)}"
     return records
 
-#删除接口
+
+# 删除接口
 @app.delete("/records/{record_id}",
             status_code=204,
             summary="删除检测记录",

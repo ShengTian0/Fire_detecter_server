@@ -1,5 +1,5 @@
-import os
 from datetime import datetime
+
 from sqlalchemy import create_engine, Column, Integer, String, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -31,6 +31,7 @@ SessionLocal = sessionmaker(
 # 声明基类
 Base = declarative_base()
 
+
 # 定义检测记录模型
 class DetectionRecord(Base):
     __tablename__ = "detections"
@@ -44,6 +45,7 @@ class DetectionRecord(Base):
     detection_time = Column(DateTime, default=datetime.now)
     fire_count = Column(Integer, default=0)
     smoke_count = Column(Integer, default=0)
+
 
 # 创建数据库表（如果不存在）
 Base.metadata.create_all(bind=engine)

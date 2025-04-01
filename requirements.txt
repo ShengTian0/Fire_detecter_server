@@ -3,5 +3,7 @@ uvicorn>=0.15.0
 sqlalchemy>=1.4.0
 ultralytics>=8.0.0
 python-multipart
-pillow
+pillow~=11.1.0
 python-dotenv
+numpy~=2.1.1
+pydantic~=2.10.6
