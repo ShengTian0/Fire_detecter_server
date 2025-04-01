@@ -7,3 +7,5 @@ pillow~=11.1.0
 python-dotenv
 numpy~=2.1.1
 pydantic~=2.10.6
+passlib~=1.7.4
+python-jose

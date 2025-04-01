@@ -4,6 +4,8 @@ from sqlalchemy import create_engine, Column, Integer, String, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
+from sqlalchemy import Column, Integer, String
+
 # MySQL 数据库配置
 MYSQL_USER = "root"
 MYSQL_PASSWORD = "031127"  # 替换为你的密码
@@ -28,8 +30,24 @@ SessionLocal = sessionmaker(
     bind=engine
 )
 
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
 # 声明基类
 Base = declarative_base()
+
+
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(50), unique=True, index=True)
+    hashed_password = Column(String(255))
 
 
 # 定义检测记录模型

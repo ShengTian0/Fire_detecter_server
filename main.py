@@ -1,8 +1,9 @@
 # main.py
+from database import User, get_db
 import os
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from PIL import Image
@@ -25,6 +26,101 @@ from sqlalchemy import desc
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from ultralytics import YOLO
+# 登录需要
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from passlib.context import CryptContext
+from jose import JWTError, jwt
+from datetime import timedelta
+
+# 密码上下文
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# 新增配置项
+SECRET_KEY = "your-secret-key-here"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+# 创建数据库表（在启动时）
+Base.metadata.create_all(bind=engine)
+
+# OAuth2方案
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
+
+
+# 新增的Pydantic模型
+class UserCreate(BaseModel):
+    username: str
+    password: str
+
+
+class UserInDB(UserCreate):
+    hashed_password: str
+
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+
+class TokenData(BaseModel):
+    username: str | None = None
+
+
+# 工具函数
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
+
+
+def get_user(db: Session, username: str):
+    return db.query(User).filter(User.username == username).first()
+
+
+def authenticate_user(db: Session, username: str, password: str):
+    user = get_user(db, username)
+    if not user:
+        return False
+    if not verify_password(password, user.hashed_password):
+        return False
+    return user
+
+
+def create_access_token(data: dict, expires_delta: timedelta | None = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+
+# 新增依赖项
+async def get_current_user(
+        token: str = Depends(oauth2_scheme),
+        db: Session = Depends(get_db)
+):
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="无法验证凭证",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+        token_data = TokenData(username=username)
+    except JWTError:
+        raise credentials_exception
+    user = get_user(db, username=token_data.username)
+    if user is None:
+        raise credentials_exception
+    return user
 
 
 # 响应模型
@@ -40,6 +136,29 @@ class DetectionRecordResponse(BaseModel):
         from_attributes = True
 
 
+# 密码上下文初始化（放在文件顶部其他配置之后）
+
+def init_admin_account(db: Session):
+    """
+    初始化管理员账户
+    """
+    # 检查是否存在admin用户
+    admin_user = db.query(User).filter(User.username == "admin").first()
+
+    if not admin_user:
+        # 生成安全哈希
+        hashed_password = pwd_context.hash("admin123")
+        new_user = User(
+            username="admin",
+            hashed_password=hashed_password
+        )
+        db.add(new_user)
+        db.commit()
+        print("[初始化] 管理员账户已创建")
+    else:
+        print("[初始化] 管理员账户已存在")
+
+
 # 初始化FastAPI应用
 app = FastAPI(
     title="火灾烟雾检测系统API",
@@ -51,8 +170,10 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,  # 1212
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"]
 )
 
 # 静态文件配置
@@ -79,12 +200,69 @@ async def startup_db():
     # 创建数据库表
     Base.metadata.create_all(bind=engine)
 
+    # 初始化管理员
+    db = SessionLocal()
+    try:
+        init_admin_account(db)
+    finally:
+        db.close()
+
 
 # 工具函数
 async def save_upload_file(file: UploadFile, save_path: str):
     with open(save_path, "wb") as f:
         while chunk := await file.read(1024 * 1024):  # 1MB chunks
             f.write(chunk)
+
+
+# 新增登录路由
+@app.post("/login", response_model=Token)
+async def login_for_access_token(
+        form_data: OAuth2PasswordRequestForm = Depends(),
+        db: Session = Depends(get_db)
+):
+    user = authenticate_user(db, form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="用户名或密码错误",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.username}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+
+# 新增测试受保护路由
+@app.get("/users/me")
+async def get_current_user(
+        token: str = Depends(oauth2_scheme),
+        db: Session = Depends(get_db)
+):
+    try:
+        payload = jwt.decode(
+            token,
+            SECRET_KEY,
+            algorithms=[ALGORITHM]  # ✅ 确认算法一致
+        )
+        # 增加调试日志
+        print(f"[DEBUG] 解析Token内容: {payload}")
+
+        username = payload.get("sub")
+        if not username:
+            raise HTTPException(status_code=401, detail="无效凭证")
+
+        user = get_user(db, username=username)
+        if not user:
+            raise HTTPException(status_code=401, detail="用户不存在")
+
+        return user
+    except JWTError as e:
+        # 增加错误日志
+        print(f"[JWT ERROR] {str(e)}")
+        raise HTTPException(status_code=401, detail="Token验证失败")
 
 
 # 检测接口
@@ -282,7 +460,11 @@ def delete_record(
     return Response(status_code=204)
 
 
-# 健康检查接口
-@app.get("/health", include_in_schema=False)
-def health_check():
-    return {"status": "healthy", "timestamp": datetime.now()}
+@app.post("/logout")
+def logout(current_user: User = Depends(get_current_user)):
+    """
+    用户退出登录
+    - 前端需要清除本地存储的token
+    - 服务端使token失效（当前实现无状态，实际需要客户端主动清除）
+    """
+    return {"status": "200", "message": "退出成功"}
