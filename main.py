@@ -19,7 +19,8 @@ from fastapi import (
     Query,
     Path,
     Response,
-    Form
+    Form,
+    status
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -33,6 +34,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 from datetime import timedelta
+from pydantic import BaseModel
 
 # 密码上下文
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -53,6 +55,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 class UserCreate(BaseModel):
     username: str
     password: str
+    role: str
 
 
 class UserInDB(UserCreate):
@@ -62,10 +65,19 @@ class UserInDB(UserCreate):
 class Token(BaseModel):
     access_token: str
     token_type: str
+    role: str
 
 
 class TokenData(BaseModel):
     username: str | None = None
+
+class UserResponse(BaseModel):
+    id: int
+    username: str
+    role: str
+
+    class Config:
+        orm_mode = True
 
 
 # 工具函数
@@ -152,7 +164,8 @@ def init_admin_account(db: Session):
         hashed_password = pwd_context.hash("admin123")
         new_user = User(
             username="admin",
-            hashed_password=hashed_password
+            hashed_password=hashed_password,
+            role='admin'
         )
         db.add(new_user)
         db.commit()
@@ -170,8 +183,8 @@ app = FastAPI(
 
 # 跨域配置
 app.add_middleware(
-    CORSMiddleware,  # 1212
-    allow_origins=["*"],
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:5173"],  # Add your frontend origin here
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -234,9 +247,11 @@ async def login_for_access_token(
     access_token = create_access_token(
         data={"sub": user.username}, expires_delta=access_token_expires
     )
-    return {"access_token": access_token, "token_type": "bearer"}
-
-
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "role": user.role
+    }
 # 新增测试受保护路由
 @app.get("/users/me")
 async def get_current_user(
@@ -465,6 +480,45 @@ def delete_record(
 
     return Response(status_code=204)
 
+
+@app.get("/users", response_model=List[UserResponse])
+async def get_users(db: Session = Depends(get_db)):
+    users = db.query(User).all()
+    return users
+
+
+# Update user information
+@app.put("/users/{user_id}", response_model=UserCreate)
+async def update_user(user_id: int, user: UserCreate, db: Session = Depends(get_db)):
+    db_user = db.query(User).filter(User.id == user_id).first()
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    db_user.username = user.username
+    db_user.hashed_password = get_password_hash(user.password)
+    db_user.role = user.role
+
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+
+@app.post("/users", response_model=UserResponse)
+async def create_user(user: UserCreate, db: Session = Depends(get_db)):
+    db_user = db.query(User).filter(User.username == user.username).first()
+    if db_user:
+        raise HTTPException(status_code=400, detail="Username already registered")
+
+    hashed_password = get_password_hash(user.password)
+    new_user = User(
+        username=user.username,
+        hashed_password=hashed_password,
+        role=user.role
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return new_user
 
 @app.post("/logout")
 def logout(current_user: User = Depends(get_current_user)):

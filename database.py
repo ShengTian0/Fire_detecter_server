@@ -1,3 +1,4 @@
+
 from datetime import datetime
 
 from sqlalchemy import create_engine, Column, Integer, String, DateTime
@@ -8,7 +9,7 @@ from sqlalchemy import Column, Integer, String
 
 # MySQL 数据库配置
 MYSQL_USER = "root"
-MYSQL_PASSWORD = "031127"  # 替换为你的密码
+MYSQL_PASSWORD = "031127"
 MYSQL_HOST = "localhost"
 MYSQL_PORT = "3306"
 MYSQL_DB = "fire_detection"
@@ -48,6 +49,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), unique=True, index=True)
     hashed_password = Column(String(255))
+    role = Column(String(50))
 
 
 # 定义检测记录模型
