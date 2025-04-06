@@ -1,11 +1,9 @@
-
 from datetime import datetime
 
-from sqlalchemy import create_engine, Column, Integer, String, DateTime
+from sqlalchemy import Column, Integer, String
+from sqlalchemy import create_engine, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-
-from sqlalchemy import Column, Integer, String
 
 # MySQL 数据库配置
 MYSQL_USER = "root"
@@ -65,6 +63,15 @@ class DetectionRecord(Base):
     detection_time = Column(DateTime, default=datetime.now)
     fire_count = Column(Integer, default=0)
     smoke_count = Column(Integer, default=0)
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    location = Column(String(255), nullable=False)
+    time = Column(DateTime, nullable=False)
+    result = Column(String(255), nullable=False)  # Store result as JSON string
 
 
 # 创建数据库表（如果不存在）

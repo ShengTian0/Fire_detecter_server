@@ -36,6 +36,12 @@ from jose import JWTError, jwt
 from datetime import timedelta
 from pydantic import BaseModel
 
+from sqlalchemy import JSON
+from database import Notification
+
+import json
+# 数据库配置
+
 # 密码上下文
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -76,8 +82,24 @@ class UserResponse(BaseModel):
     username: str
     role: str
 
-    class Config:
-        orm_mode = True
+
+
+
+# 通知请求模型
+class NotificationRequest(BaseModel):
+    location: str
+    time: str
+    result: dict
+
+class NotificationResponse(BaseModel):
+    id: int
+    location: str
+    time: datetime
+    result: dict
+
+class Config:
+    orm_mode = True
+
 
 
 # 工具函数
@@ -284,6 +306,7 @@ async def get_current_user(
 
 # 检测接口
 
+
 @app.post("/detect/",
           response_model=dict,
           status_code=201,
@@ -295,7 +318,8 @@ async def get_current_user(
           })
 async def detect_fire_smoke(
         file: UploadFile = File(..., description="需要检测的图片文件（JPEG/PNG）"),
-        model: str = Form(..., description="选择的模型名称"),  # 确保这行代码正确
+        model: str = Form(..., description="选择的模型名称"),
+        confidence: float = Form(..., description="置信度阈值"),
         db: Session = Depends(get_db)
 ):
     # 验证文件类型
@@ -341,7 +365,7 @@ async def detect_fire_smoke(
             results = model.predict(
                 source=upload_path,
                 imgsz=640,
-                conf=0.25,
+                conf=confidence,  # 使用传入的置信度阈值
                 save=False
             )
             if not results:
@@ -400,6 +424,7 @@ async def detect_fire_smoke(
             status_code=500,
             detail=f"检测失败: {str(e)}"
         )
+
 
 # 历史记录接口
 @app.get("/records/",
@@ -519,6 +544,57 @@ async def create_user(user: UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_user)
     return new_user
+
+@app.post("/notify", status_code=200)
+async def send_notification(notification: NotificationRequest, db: Session = Depends(get_db)):
+    try:
+        # 解析时间字符串
+        notification_time = datetime.fromisoformat(notification.time)
+
+        # 序列化结果为JSON字符串
+        result_json = json.dumps(notification.result)
+
+        # 保存通知到数据库
+        new_notification = Notification(
+            location=notification.location,
+            time=notification_time,
+            result=result_json
+        )
+        db.add(new_notification)
+        db.commit()
+        db.refresh(new_notification)
+        return {"status": "success", "message": "通知发送成功"}
+    except Exception as e:
+        # 打印错误日志
+        print(f"通知发送失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"通知发送失败: {str(e)}")
+
+
+@app.get("/notifications", response_model=List[NotificationResponse])
+async def get_notifications(
+        page: int = Query(1, ge=1, description="页码（从1开始）"),
+        per_page: int = Query(20, le=100, description="每页数量（最大100）"),
+        db: Session = Depends(get_db)
+):
+    offset = (page - 1) * per_page
+    notifications = db.query(Notification).offset(offset).limit(per_page).all()
+
+    # Deserialize the JSON string to a dictionary
+    for notification in notifications:
+        notification.result = json.loads(notification.result)
+
+    return notifications
+
+
+@app.delete("/notifications/{notification_id}", status_code=204)
+async def delete_notification(notification_id: int, db: Session = Depends(get_db)):
+    notification = db.query(Notification).filter(Notification.id == notification_id).first()
+    if not notification:
+        raise HTTPException(status_code=404, detail="通知不存在")
+
+    db.delete(notification)
+    db.commit()
+    return Response(status_code=204)
 
 @app.post("/logout")
 def logout(current_user: User = Depends(get_current_user)):
