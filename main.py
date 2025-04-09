@@ -1,4 +1,3 @@
-# main.py
 from database import User, get_db
 import os
 import re
@@ -40,15 +39,16 @@ from sqlalchemy import JSON
 from database import Notification
 
 import json
-# 数据库配置
+STATIC_DIR = "static"
+PREDICT_DIR = os.path.join(STATIC_DIR, "results", "predict")  # 统一结果目录
+os.makedirs(PREDICT_DIR, exist_ok=True)
 
-# 密码上下文
+# ================== 安全配置 ==================
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-# 新增配置项
 SECRET_KEY = "your-secret-key-here"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 
 # 创建数据库表（在启动时）
 Base.metadata.create_all(bind=engine)
@@ -214,10 +214,8 @@ app.add_middleware(
 )
 
 # 静态文件配置
-STATIC_DIR = "static"
-os.makedirs(f"{STATIC_DIR}/uploads", exist_ok=True)
-os.makedirs(f"{STATIC_DIR}/results", exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/static/results/predict", StaticFiles(directory=PREDICT_DIR), name="predict_results")
 
 # 加载YOLO模型
 model = YOLO("models/Fire&Smoke.pt")  # 替换为你的模型路径
@@ -307,142 +305,113 @@ async def get_current_user(
 # 检测接口
 
 
-@app.post("/detect/",
-          response_model=dict,
-          status_code=201,
-          summary="上传检测图片",
-          responses={
-              201: {"description": "检测成功"},
-              400: {"description": "无效文件类型"},
-              500: {"description": "检测失败"}
-          })
+@app.post("/detect/", response_model=dict, status_code=201)
 async def detect_fire_smoke(
-        file: UploadFile = File(..., description="需要检测的图片文件（JPEG/PNG）"),
-        model: str = Form(..., description="选择的模型名称"),
-        confidence: float = Form(..., description="置信度阈值"),
+        file: UploadFile = File(...),
+        model: str = Form("Fire&Smoke"),
+        confidence: float = Form(0.5),
         db: Session = Depends(get_db)
 ):
-    # 验证文件类型
-    if file.content_type not in ["image/jpeg", "image/png"]:
-        raise HTTPException(
-            status_code=400,
-            detail="仅支持JPEG/PNG格式图片"
-        )
+    # 文件类型验证
+    if file.content_type not in ["image/jpeg", "image/png", "video/mp4"]:
+        raise HTTPException(400, "仅支持JPEG/PNG/MP4格式")
 
-    # 初始化路径变量用于错误清理
     upload_path = None
-    result_path = None
-
     try:
-        # ================== 文件名处理 ==================
-        original_name = re.sub(r'[^\w\u4e00-\u9fa5_.-]', '_', file.filename)  # 支持中文
+        # 生成唯一文件名
+        original_name = re.sub(r'[^\w\u4e00-\u9fa5_.-]', '_', file.filename)
         base_name, ext = os.path.splitext(original_name)
         unique_id = uuid.uuid4().hex[:8]
-        saved_filename = f"{base_name}_{unique_id}{ext.lower()}"  # 统一小写扩展名
+        saved_filename = f"{base_name}_{unique_id}{ext.lower()}"
 
-        # ================== 路径生成 ==================
+        # 保存上传文件
         upload_dir = os.path.join(STATIC_DIR, "uploads")
-        result_dir = os.path.join(STATIC_DIR, "results")
         os.makedirs(upload_dir, exist_ok=True)
-        os.makedirs(result_dir, exist_ok=True)
-
         upload_path = os.path.join(upload_dir, saved_filename)
-        result_path = os.path.join(result_dir, saved_filename)
+        await save_upload_file(file, upload_path)
 
-        # ================== 保存文件 ==================
-        try:
-            await save_upload_file(file, upload_path)
-            if not os.path.exists(upload_path):
-                raise HTTPException(500, "文件保存验证失败")
-        except IOError as e:
-            raise HTTPException(500, f"文件写入失败: {str(e)}")
+        # 加载模型
+        yolo_model = YOLO(f"models/{model}.pt")
 
-        # ================== 模型推理 ==================
-        try:
-            # 根据传入的模型名称加载模型
-            model_path = f"models/{model}.pt"
-            model = YOLO(model_path)
-            results = model.predict(
+        # 统一结果路径配置
+        result_dir = PREDICT_DIR  # static/results/predict
+        result_video_dir = os.path.join(STATIC_DIR, "results")
+
+        if file.content_type == "video/mp4":
+            # 视频处理（关键参数配置）
+            results = yolo_model.predict(
                 source=upload_path,
                 imgsz=640,
-                conf=confidence,  # 使用传入的置信度阈值
-                save=False
+                conf=confidence,
+                save=True,
+                project=result_video_dir,  # 指定到目标目录
+                name="",  # 禁止生成子目录
+                exist_ok=True,
+                save_dir=result_video_dir  # 显式指定保存路径
             )
-            if not results:
-                raise ValueError("模型未返回结果")
+
+            # 获取生成的文件路径
+            result_filename = os.path.basename(results[0].path).replace(".mp4", ".avi")
+            result_path = os.path.join(result_dir, result_filename)
+
+            # 统计检测结果
+            fire_count = sum(1 for r in results for cls in r.boxes.cls if cls == 0)
+            smoke_count = sum(1 for r in results for cls in r.boxes.cls if cls == 1)
+        else:
+            # 图片处理
+            results = yolo_model.predict(upload_path, conf=confidence)
             result = results[0]
-        except Exception as model_error:
-            raise HTTPException(500, f"推理错误: {str(model_error)}")
 
-        # ================== 保存结果 ==================
-        try:
-            im_array = result.plot(line_width=2, font_size=10)
-            im = Image.fromarray(im_array[..., ::-1])
-            im.save(result_path)
-            if not os.path.exists(result_path):
-                raise RuntimeError("结果文件生成失败")
-        except Exception as save_error:
-            raise HTTPException(500, f"结果保存失败: {str(save_error)}")
+            # 生成结果文件名
+            result_filename = f"{base_name}_detected_{unique_id}.jpg"
+            result_path = os.path.join(result_dir, result_filename)
 
-        # ================== 数据库操作 ==================
-        try:
-            record = DetectionRecord(
-                original_name=original_name,
-                saved_name=saved_filename,
-                image_path=f"uploads/{saved_filename}",  # 存储相对路径
-                result_path=f"results/{saved_filename}",
-                fire_count=sum(1 for cls in result.boxes.cls if cls == 0),
-                smoke_count=sum(1 for cls in result.boxes.cls if cls == 1),
-                detection_time=datetime.now()
-            )
-            db.add(record)
-            db.commit()
-            db.refresh(record)
-        except SQLAlchemyError as db_error:
-            db.rollback()
-            raise HTTPException(500, f"数据库错误: {str(db_error)}")
+            # 保存检测结果
+            Image.fromarray(result.plot()[..., ::-1]).save(result_path)
+            fire_count = sum(1 for cls in result.boxes.cls if cls == 0)
+            smoke_count = sum(1 for cls in result.boxes.cls if cls == 1)
 
-        # 修改返回的图片路径为完整URL
+        # 数据库记录（存储相对路径）
+        record = DetectionRecord(
+            original_name=original_name,
+            saved_name=saved_filename,
+            image_path=f"uploads/{saved_filename}",
+            result_path=f"results/predict/{result_filename}",
+            fire_count=fire_count,
+            smoke_count=smoke_count,
+            detection_time=datetime.now()
+        )
+        db.add(record)
+        db.commit()
+
         return {
             "status": "success",
-            "image_url": f"http://localhost:8000/static/uploads/{saved_filename}",
-            "result_url": f"http://localhost:8000/static/results/{saved_filename}",
-            "fire_count": record.fire_count,
-            "smoke_count": record.smoke_count,
+            "uploaded_url": f"http://localhost:8000/static/uploads/{saved_filename}",
+            "result_url": f"http://localhost:8000/static/results/predict/{result_filename}",
+            "fire_count": fire_count,
+            "smoke_count": smoke_count,
             "record_id": record.id
         }
 
-    except HTTPException:
-        raise  # 直接传递已处理的HTTP异常
     except Exception as e:
-        # ================== 清理残留文件 ==================
+        # 清理残留文件
         if upload_path and os.path.exists(upload_path):
             os.remove(upload_path)
-        if result_path and os.path.exists(result_path):
-            os.remove(result_path)
-        raise HTTPException(
-            status_code=500,
-            detail=f"检测失败: {str(e)}"
-        )
-
+        raise HTTPException(500, f"检测失败: {str(e)}")
 
 # 历史记录接口
-@app.get("/records/",
-         response_model=List[DetectionRecordResponse],
-         summary="获取检测历史",
-         description="分页查询带过滤条件的检测记录")
+@app.get("/records/", response_model=List[DetectionRecordResponse])
 def get_records(
-        page: int = Query(1, ge=1, description="页码（从1开始）"),
-        per_page: int = Query(6, le=100, description="每页数量（最大100）"),  # 根据截图显示6条修改默认值
-        start_time: Optional[datetime] = Query(None, description="开始时间（ISO格式）"),
-        end_time: Optional[datetime] = Query(None, description="结束时间（ISO格式）"),
-        min_fire: Optional[int] = Query(None, ge=0, description="最小火灾数量"),
+        page: int = Query(1, ge=1),
+        per_page: int = Query(6, le=100),
+        start_time: Optional[datetime] = Query(None),
+        end_time: Optional[datetime] = Query(None),
+        min_fire: Optional[int] = Query(None, ge=0),
         db: Session = Depends(get_db)
 ):
-    # 构建基础查询
     query = db.query(DetectionRecord)
 
-    # 时间范围过滤
+    # 时间过滤
     if start_time or end_time:
         if start_time and end_time:
             query = query.filter(DetectionRecord.detection_time.between(start_time, end_time))
@@ -455,16 +424,17 @@ def get_records(
     if min_fire is not None:
         query = query.filter(DetectionRecord.fire_count >= min_fire)
 
-    # 执行分页查询
+    # 分页查询
     records = query.order_by(desc(DetectionRecord.detection_time)) \
         .offset((page - 1) * per_page) \
         .limit(per_page) \
         .all()
 
-    # 转换路径为可访问的URL
+    # 转换路径格式
     for record in records:
-        record.image_path = f"/static/uploads/{os.path.basename(record.image_path)}"
-        record.result_path = f"/static/results/{os.path.basename(record.result_path)}"
+        record.image_path = f"/static/{record.image_path}"
+        record.result_path = f"/static/{record.result_path}"
+
     return records
 
 
@@ -486,22 +456,41 @@ def delete_record(
         raise HTTPException(status_code=404, detail="记录不存在")
 
     try:
+        # 获取静态文件绝对路径
+        static_dir = os.path.abspath(STATIC_DIR)
+
+        # 处理上传文件路径（格式：uploads/filename.jpg）
+        upload_rel_path = record.image_path.lstrip("/")  # 去除可能存在的斜杠
+        upload_file = os.path.join(static_dir, upload_rel_path)
+
+        # 处理结果文件路径（格式：results/predict/filename.avi）
+        result_rel_path = record.result_path.lstrip("/")  # 去除可能存在的斜杠
+        result_file = os.path.join(static_dir, result_rel_path)
+
+        # 打印调试信息
+        print(f"[DEBUG] 待删除文件路径：")
+        print(f"Upload: {upload_file} ({'存在' if os.path.exists(upload_file) else '不存在'})")
+        print(f"Result: {result_file} ({'存在' if os.path.exists(result_file) else '不存在'})")
+
         # 删除文件
-        upload_file = os.path.join(STATIC_DIR, record.image_path)
-        result_file = os.path.join(STATIC_DIR, record.result_path)
-        if os.path.exists(upload_file):
+        if os.path.isfile(upload_file):
             os.remove(upload_file)
-        if os.path.exists(result_file):
+        if os.path.isfile(result_file):
             os.remove(result_file)
 
         # 删除记录
         db.delete(record)
         db.commit()
-    except SQLAlchemyError as e:  # 使用已导入的异常类型
+    except SQLAlchemyError as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"数据库错误: {str(e)}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"文件操作失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"文件操作失败: {str(e)}. 请检查以下路径：\n"
+                   f"上传文件: {upload_file}\n"
+                   f"结果文件: {result_file}"
+        )
 
     return Response(status_code=204)
 
