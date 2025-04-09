@@ -39,6 +39,8 @@ from sqlalchemy import JSON
 from database import Notification
 
 import json
+
+from realtime_detection import router as realtime_detection_router
 STATIC_DIR = "static"
 PREDICT_DIR = os.path.join(STATIC_DIR, "results", "predict")  # 统一结果目录
 os.makedirs(PREDICT_DIR, exist_ok=True)
@@ -437,7 +439,7 @@ def get_records(
 
     return records
 
-
+app.include_router(realtime_detection_router)
 # 删除接口
 @app.delete("/records/{record_id}",
             status_code=204,
