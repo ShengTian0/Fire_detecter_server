@@ -211,7 +211,7 @@ app.add_middleware(
     allow_origins=["http://127.0.0.1:5173"],  # Add your frontend origin here
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "Content-Type"],
     expose_headers=["*"]
 )
 

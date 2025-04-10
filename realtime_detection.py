@@ -48,7 +48,12 @@ async def detect_realtime(image: str = Body(..., embed=True)):
                     "label": model.names[int(box.cls)]
                 })
         print("完整检测结果示例:", detections[:1])  # 显示第一个检测结果
-        return {"results": detections}
+        return {
+            "status": "success",
+            "data": {  # 添加data层包装
+                "results": detections}
+        }
+
 
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=f"Request error: {str(ve)}")
