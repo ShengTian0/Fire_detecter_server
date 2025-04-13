@@ -23,6 +23,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy import desc
 from sqlalchemy.exc import SQLAlchemyError
@@ -41,6 +42,11 @@ from database import Notification
 import json
 
 from realtime_detection import router as realtime_detection_router
+
+
+
+
+
 STATIC_DIR = "static"
 PREDICT_DIR = os.path.join(STATIC_DIR, "results", "predict")  # 统一结果目录
 os.makedirs(PREDICT_DIR, exist_ok=True)
@@ -208,7 +214,7 @@ app = FastAPI(
 # 跨域配置
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:5173"],  # Add your frontend origin here
+    allow_origins=["http://127.0.0.1:5173","http://127.0.0.1:8000"], # Add your frontend origin here
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["Authorization", "Content-Type"],
@@ -218,6 +224,12 @@ app.add_middleware(
 # 静态文件配置
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/static/results/predict", StaticFiles(directory=PREDICT_DIR), name="predict_results")
+
+#vue3打包入fastapi中
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+app.mount("/dist", StaticFiles(directory=os.path.join(BASE_DIR, 'FireFinder_Server/dist')), name="dist")
+app.mount("/assets", StaticFiles(directory=os.path.join(BASE_DIR, 'FireFinder_Server/dist/assets')), name="assets")
 
 # 加载YOLO模型
 model = YOLO("models/Fire&Smoke.pt")  # 替换为你的模型路径
@@ -251,6 +263,14 @@ async def save_upload_file(file: UploadFile, save_path: str):
         while chunk := await file.read(1024 * 1024):  # 1MB chunks
             f.write(chunk)
 
+
+@app.get("/")
+def main():
+    html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dist', 'index.html')
+    html_content = ''
+    with open(html_path) as f:
+        html_content = f.read()
+    return HTMLResponse(content=html_content, status_code=200)
 
 # 新增登录路由
 @app.post("/login", response_model=Token)
