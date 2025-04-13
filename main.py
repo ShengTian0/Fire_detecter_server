@@ -287,6 +287,12 @@ async def login_for_access_token(
             detail="用户名或密码错误",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    # Update the is_active field to 1
+    user.is_active = 1
+    db.commit()
+    db.refresh(user)
+
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={"sub": user.username}, expires_delta=access_token_expires
@@ -296,7 +302,7 @@ async def login_for_access_token(
         "token_type": "bearer",
         "role": user.role
     }
-# 新增测试受保护路由
+
 @app.get("/users/me")
 async def get_current_user(
         token: str = Depends(oauth2_scheme),
@@ -316,15 +322,14 @@ async def get_current_user(
             raise HTTPException(status_code=401, detail="无效凭证")
 
         user = get_user(db, username=username)
-        if not user:
-            raise HTTPException(status_code=401, detail="用户不存在")
+        if not user or user.is_active != 1:
+            raise HTTPException(status_code=401, detail="无效凭证")
 
         return user
     except JWTError as e:
         # 增加错误日志
         print(f"[JWT ERROR] {str(e)}")
         raise HTTPException(status_code=401, detail="Token验证失败")
-
 
 # 检测接口
 
@@ -630,10 +635,12 @@ async def delete_notification(notification_id: int, db: Session = Depends(get_db
     return Response(status_code=204)
 
 @app.post("/logout")
-def logout(current_user: User = Depends(get_current_user)):
-    """
-    用户退出登录
-    - 前端需要清除本地存储的token
-    - 服务端使token失效（当前实现无状态，实际需要客户端主动清除）
-    """
+def logout(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+
+    current_user.is_active = 0
+    db.commit()
+    db.refresh(current_user)
     return {"status": "200", "message": "退出成功"}

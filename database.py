@@ -48,6 +48,7 @@ class User(Base):
     username = Column(String(50), unique=True, index=True)
     hashed_password = Column(String(255))
     role = Column(String(50))
+    is_active= Column(Integer, default=0)  # 1表示激活，0表示未激活
 
 
 # 定义检测记录模型
