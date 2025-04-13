@@ -80,6 +80,7 @@ class Token(BaseModel):
     access_token: str
     token_type: str
     role: str
+    user_id: int
 
 
 class TokenData(BaseModel):
@@ -98,6 +99,7 @@ class NotificationRequest(BaseModel):
     location: str
     time: str
     result: dict
+    user_id: int
 
 class NotificationResponse(BaseModel):
     id: int
@@ -281,6 +283,7 @@ async def login_for_access_token(
         db: Session = Depends(get_db)
 ):
     user = authenticate_user(db, form_data.username, form_data.password)
+    # print(user.id)
     if not user:
         raise HTTPException(
             status_code=401,
@@ -300,7 +303,8 @@ async def login_for_access_token(
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "role": user.role
+        "role": user.role,
+        "user_id": user.id
     }
 
 @app.get("/users/me")
@@ -339,6 +343,7 @@ async def detect_fire_smoke(
         file: UploadFile = File(...),
         model: str = Form("Fire&Smoke"),
         confidence: float = Form(0.5),
+        user_id: int = Form(...),
         db: Session = Depends(get_db)
 ):
     # 文件类型验证
@@ -408,7 +413,8 @@ async def detect_fire_smoke(
             result_path=f"results/predict/{result_filename}",
             fire_count=fire_count,
             smoke_count=smoke_count,
-            detection_time=datetime.now()
+            detection_time=datetime.now(),
+            user_id=user_id
         )
         db.add(record)
         db.commit()
@@ -584,7 +590,10 @@ async def create_user(user: UserCreate, db: Session = Depends(get_db)):
     return new_user
 
 @app.post("/notify", status_code=200)
-async def send_notification(notification: NotificationRequest, db: Session = Depends(get_db)):
+async def send_notification(
+    notification: NotificationRequest,
+    db: Session = Depends(get_db)
+):
     try:
         # 解析时间字符串
         notification_time = datetime.fromisoformat(notification.time)
@@ -596,7 +605,8 @@ async def send_notification(notification: NotificationRequest, db: Session = Dep
         new_notification = Notification(
             location=notification.location,
             time=notification_time,
-            result=result_json
+            result=result_json,
+            user_id=notification.user_id  # Use the provided user_id
         )
         db.add(new_notification)
         db.commit()
@@ -606,7 +616,6 @@ async def send_notification(notification: NotificationRequest, db: Session = Dep
         # 打印错误日志
         print(f"通知发送失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"通知发送失败: {str(e)}")
-
 
 @app.get("/notifications", response_model=List[NotificationResponse])
 async def get_notifications(
