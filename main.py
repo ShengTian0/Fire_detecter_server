@@ -90,10 +90,6 @@ class UserResponse(BaseModel):
     id: int
     username: str
     role: str
-
-
-
-
 # 通知请求模型
 class NotificationRequest(BaseModel):
     location: str
