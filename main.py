@@ -104,7 +104,9 @@ class NotificationResponse(BaseModel):
     location: str
     time: datetime
     result: dict
-
+class UpdateRecordRequest(BaseModel):
+    fire_count: int
+    smoke_count: int
 class Config:
     orm_mode = True
 
@@ -516,7 +518,27 @@ def delete_record(
 
     return Response(status_code=204)
 
+@app.put("/records/{record_id}", status_code=200, summary="更新检测记录")
+async def update_record(
+        record_id: int,
+        payload: UpdateRecordRequest,  # 使用 Pydantic 模型接收 JSON 数据
+        db: Session = Depends(get_db)
+):
+    # 查询记录
+    record = db.query(DetectionRecord).filter(DetectionRecord.id == record_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="记录不存在")
 
+    try:
+        # 更新字段
+        record.fire_count = payload.fire_count
+        record.smoke_count = payload.smoke_count
+        db.commit()
+        db.refresh(record)
+        return {"status": "success", "message": "记录更新成功"}
+    except SQLAlchemyError as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"数据库错误: {str(e)}")
 @app.get("/users", response_model=List[UserResponse])
 async def get_users(db: Session = Depends(get_db)):
     users = db.query(User).all()
