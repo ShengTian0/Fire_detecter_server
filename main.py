@@ -465,7 +465,6 @@ def get_records(
     for record in records:
         record.image_path = f"/static/{record.image_path}"
         record.result_path = f"/static/{record.result_path}"
-
     return records
 
 app.include_router(realtime_detection_router)
@@ -548,12 +547,15 @@ async def update_record(
         raise HTTPException(status_code=500, detail=f"数据库错误: {str(e)}")
 @app.get("/users", response_model=List[UserResponse])
 async def get_users(db: Session = Depends(get_db)):
-    users = db.query(User).all()
-    return users
+    try:
+        users = db.query(User).all()
+        return users
+    except SQLAlchemyError as e:
+        raise HTTPException(status_code=500, detail=f"数据库错误: {str(e)}")
 
 
 # Update user information
-@app.put("/users/{user_id}", response_model=UserCreate)
+@app.put("/users/{user_id}", response_model=UserResponse)
 async def update_user(user_id: int, user: UserCreate, db: Session = Depends(get_db)):
     db_user = db.query(User).filter(User.id == user_id).first()
     if not db_user:
@@ -625,7 +627,6 @@ async def get_notifications(
     # Deserialize the JSON string to a dictionary
     for notification in notifications:
         notification.result = json.loads(notification.result)
-
     return notifications
 
 

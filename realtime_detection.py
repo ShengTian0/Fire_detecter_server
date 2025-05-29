@@ -17,9 +17,6 @@ except Exception as e:
 
 @router.post("/detect-realtime")
 async def detect_realtime(image: str = Body(..., embed=True)):
-    """
-    Detect objects in a base64-encoded image.
-    """
     try:
         # Validate Base64 image format
         if not image.startswith("data:image"):
